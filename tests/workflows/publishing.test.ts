@@ -52,6 +52,14 @@ describe('publishing workflow', () => {
     expect(quality.issues).toContain('Contains repeated whitespace.');
   });
 
+  it('matches required keywords on word boundaries', () => {
+    const missing = calculateQualityScore('The agentic workflow is clear.', ['agent']);
+    const present = calculateQualityScore('The agent workflow is clear.', ['agent']);
+
+    expect(missing.metrics.requiredKeywordCoverage).toBe(0);
+    expect(present.metrics.requiredKeywordCoverage).toBe(1);
+  });
+
   it('generates a reusable outline for a publishing topic', () => {
     const outline = generateOutline('agent economies');
 
@@ -69,7 +77,12 @@ describe('publishing workflow', () => {
     expect(docx.filename).toBe('chapter.docx');
     expect(docx.mimeType).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     expect(docx.content).toContain('<html>');
+    expect(docx.content).toContain('<p>Title</p>');
     expect(epub.filename).toBe('chapter.epub');
     expect(epub.content).toContain('xmlns="http://www.w3.org/1999/xhtml"');
+
+    const structured = exportToFormat('# Title\n\n- one\n- two', 'docx', 'structured');
+    expect(structured.content).toContain('<h1>Title</h1>');
+    expect(structured.content).toContain('<ul><li>one</li><li>two</li></ul>');
   });
 });

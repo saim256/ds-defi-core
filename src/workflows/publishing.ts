@@ -59,6 +59,8 @@ export interface ExportedDocument {
 }
 
 const publishingTasks = new Map<string, PublishingTask>();
+const WORD_PATTERN = /[\p{L}\p{N}'-]+/gu;
+const SENTENCE_PATTERN = /[^.!?\n]+[.!?]+|[^.!?\n]+$/g;
 
 const TASK_CONFIG: Record<
   PublishingTaskType,
@@ -180,17 +182,14 @@ export function validateSubmission(taskId: string, content: string): SubmissionV
 
 export function calculateQualityScore(content: string, requiredKeywords: string[] = []): QualityScore {
   const normalized = content.trim();
-  const words = normalized.match(/\b[\w'-]+\b/g) ?? [];
-  const sentences = normalized
-    .split(/[.!?]+/)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
+  const words = getWords(normalized);
+  const sentences = getSentences(normalized);
 
   const wordCount = words.length;
   const sentenceCount = Math.max(sentences.length, 1);
   const averageWordsPerSentence = wordCount / sentenceCount;
   const longSentenceCount = sentences.filter((sentence) => {
-    const sentenceWords = sentence.match(/\b[\w'-]+\b/g) ?? [];
+    const sentenceWords = getWords(sentence);
     return sentenceWords.length > 30;
   }).length;
   const repeatedWhitespaceCount = (content.match(/[ \t]{2,}/g) ?? []).length;
@@ -286,9 +285,7 @@ function calculateKeywordCoverage(content: string, requiredKeywords: string[]): 
   if (requiredKeywords.length === 0) return 1;
 
   const lowerContent = content.toLowerCase();
-  const matched = requiredKeywords.filter((keyword) =>
-    lowerContent.includes(keyword.trim().toLowerCase())
-  );
+  const matched = requiredKeywords.filter((keyword) => keywordMatches(lowerContent, keyword));
 
   return matched.length / requiredKeywords.length;
 }
@@ -315,10 +312,7 @@ function countSyllables(word: string): number {
 }
 
 function toWordCompatibleHtml(content: string): string {
-  const body = content
-    .split(/\n{2,}/)
-    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br />')}</p>`)
-    .join('\n');
+  const body = renderMarkdownBlocks(content);
 
   return `<!doctype html>
 <html>
@@ -334,12 +328,49 @@ function toEpubXhtml(content: string): string {
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>Publishing Export</title></head>
 <body>
-${content
-  .split(/\n{2,}/)
-  .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br />')}</p>`)
-  .join('\n')}
+${renderMarkdownBlocks(content)}
 </body>
 </html>`;
+}
+
+function renderMarkdownBlocks(content: string): string {
+  const blocks = content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+
+  return blocks
+    .map((block) => {
+      const heading = block.match(/^(#{1,6})\s+(.+)$/);
+      if (heading) {
+        const level = heading[1].length;
+        return `<h${level}>${escapeHtml(heading[2])}</h${level}>`;
+      }
+
+      const lines = block.split('\n');
+      if (lines.every((line) => /^\s*[-*]\s+/.test(line))) {
+        const items = lines
+          .map((line) => `<li>${escapeHtml(line.replace(/^\s*[-*]\s+/, ''))}</li>`)
+          .join('');
+        return `<ul>${items}</ul>`;
+      }
+
+      return `<p>${escapeHtml(block).replace(/\n/g, '<br />')}</p>`;
+    })
+    .join('\n');
+}
+
+function getWords(value: string): string[] {
+  return value.match(WORD_PATTERN) ?? [];
+}
+
+function getSentences(value: string): string[] {
+  return value.match(SENTENCE_PATTERN)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [];
+}
+
+function keywordMatches(lowerContent: string, keyword: string): boolean {
+  const normalized = keyword.trim().toLowerCase();
+  if (!normalized) return true;
+
+  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}([^\\p{L}\\p{N}]|$)`, 'u').test(lowerContent);
 }
 
 function escapeHtml(value: string): string {
