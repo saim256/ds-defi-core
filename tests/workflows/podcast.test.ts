@@ -40,6 +40,12 @@ describe('podcast workflow', () => {
     expect(estimateDuration(script)).toBe(120);
   });
 
+  it('counts non-English script words when estimating duration', () => {
+    const script = Array.from({ length: 150 }, (_, index) => `palabra${index} café`).join(' ');
+
+    expect(estimateDuration(script)).toBe(120);
+  });
+
   it('generates a valid RSS item for an episode', () => {
     const rss = generateRSSEntry({
       title: 'Sovereign Agents',
@@ -55,6 +61,21 @@ describe('podcast workflow', () => {
     expect(rss).toContain('<title>Sovereign Agents</title>');
     expect(rss).toContain('<itunes:duration>01:02:03</itunes:duration>');
     expect(rss).toContain('https://example.com/episode.mp3');
+  });
+
+  it('escapes RSS XML and CDATA boundaries', () => {
+    const rss = generateRSSEntry({
+      title: 'Agents & Markets',
+      description: 'Use <safe> XML',
+      duration: 60,
+      audioUrl: 'https://example.com/episode.mp3?x=1&y=2',
+      shownotes: 'CDATA end ]]> stays safe',
+      publishedAt: new Date('2026-05-10T12:00:00Z'),
+    });
+
+    expect(rss).toContain('<title>Agents &amp; Markets</title>');
+    expect(rss).toContain('url="https://example.com/episode.mp3?x=1&amp;y=2"');
+    expect(rss).toContain('CDATA end ]]]]><![CDATA[> stays safe');
   });
 
   it('creates transcript jobs for valid audio URLs', () => {

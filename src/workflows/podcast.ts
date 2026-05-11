@@ -59,7 +59,11 @@ export interface TranscriptJob {
   message: string;
 }
 
-const podcastTasks = new Map<string, PodcastTask>();
+const DEFAULT_REQUIRED_SEGMENTS = ['intro', 'body', 'outro'];
+const MIN_BODY_WORDS = 80;
+const SHORT_EPISODE_WARNING_SECONDS = 30;
+const WORDS_PER_MINUTE = 150;
+const WORD_PATTERN = /[\p{L}\p{N}'-]+/gu;
 
 const TASK_CONFIG: Record<PodcastTaskType, { instructions: string; acceptanceCriteria: string[] }> = {
   RESEARCH_TOPIC: {
@@ -125,7 +129,7 @@ export function createPodcastTask(
     id: randomUUID(),
     type,
     params: {
-      requiredSegments: ['intro', 'body', 'outro'],
+      requiredSegments: DEFAULT_REQUIRED_SEGMENTS,
       ...params,
     },
     instructions: config.instructions,
@@ -133,19 +137,18 @@ export function createPodcastTask(
     createdAt: new Date().toISOString(),
   };
 
-  podcastTasks.set(task.id, task);
   return task;
 }
 
 export function validateScript(script: string): ScriptValidation {
   const content = script.trim();
-  const words = content.match(/\b[\w'-]+\b/g) ?? [];
+  const words = countWords(content);
   const lower = content.toLowerCase();
   const segments = {
     hasIntro: /\b(intro|introduction|cold open)\b/.test(lower),
     hasOutro: /\b(outro|closing|wrap[- ]?up|subscribe)\b/.test(lower),
     hasHostCue: /\b(host|speaker|guest|narrator)\s*:/i.test(content),
-    hasBody: words.length >= 80,
+    hasBody: words >= MIN_BODY_WORDS,
   };
   const estimatedDurationSeconds = estimateDuration(content);
   const errors: string[] = [];
@@ -156,12 +159,14 @@ export function validateScript(script: string): ScriptValidation {
   if (!segments.hasOutro) errors.push('Script is missing an outro or closing section.');
   if (!segments.hasHostCue) errors.push('Script needs host, speaker, guest, or narrator cues.');
   if (!segments.hasBody) errors.push('Script body is too short for review.');
-  if (estimatedDurationSeconds < 30) warnings.push('Estimated duration is very short for a podcast episode.');
+  if (estimatedDurationSeconds < SHORT_EPISODE_WARNING_SECONDS) {
+    warnings.push('Estimated duration is very short for a podcast episode.');
+  }
 
   return {
     valid: errors.length === 0,
     estimatedDurationSeconds,
-    wordCount: words.length,
+    wordCount: words,
     segments,
     errors,
     warnings,
@@ -169,9 +174,7 @@ export function validateScript(script: string): ScriptValidation {
 }
 
 export function estimateDuration(script: string): number {
-  const words = script.trim().match(/\b[\w'-]+\b/g) ?? [];
-  const wordsPerMinute = 150;
-  return Math.round((words.length / wordsPerMinute) * 60);
+  return Math.round((countWords(script) / WORDS_PER_MINUTE) * 60);
 }
 
 export function generateRSSEntry(episode: Episode): string {
@@ -184,7 +187,7 @@ export function generateRSSEntry(episode: Episode): string {
   <enclosure url="${escapeXml(episode.audioUrl)}" type="audio/mpeg" />
   <guid>${escapeXml(episode.audioUrl)}</guid>
   <itunes:duration>${formatDuration(episode.duration)}</itunes:duration>
-  <content:encoded><![CDATA[${episode.shownotes}]]></content:encoded>
+  <content:encoded><![CDATA[${escapeCdata(episode.shownotes)}]]></content:encoded>
 ${episode.transcript ? `  <podcast:transcript>${escapeXml(episode.transcript)}</podcast:transcript>\n` : ''}</item>`;
 }
 
@@ -238,4 +241,12 @@ function escapeXml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+function escapeCdata(value: string): string {
+  return value.replaceAll(']]>', ']]]]><![CDATA[>');
+}
+
+function countWords(value: string): number {
+  return value.match(WORD_PATTERN)?.length ?? 0;
 }
