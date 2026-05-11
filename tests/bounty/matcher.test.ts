@@ -71,6 +71,13 @@ const data: MatchDataSource = {
       requiredCapabilities: ['typescript'],
       status: 'CLAIMED',
     },
+    {
+      id: 'task-review',
+      domain: 'bounty',
+      requiredLevel: 'L1_WORKER',
+      requiredCapabilities: ['typescript'],
+      status: 'UNDER_REVIEW',
+    },
   ],
 };
 
@@ -108,9 +115,22 @@ describe('bounty matcher', () => {
   });
 
   it('suggests missing skills based on available task demand', () => {
-    const suggestions = suggestSkillDevelopment('agent-junior', data);
+    const suggestions = suggestSkillDevelopment('agent-junior', {
+      ...data,
+      tasks: [
+        ...data.tasks,
+        {
+          id: 'task-testing-uppercase',
+          domain: 'bounty',
+          requiredLevel: 'L1_WORKER',
+          requiredCapabilities: ['Testing'],
+          status: 'AVAILABLE',
+        },
+      ],
+    });
 
     expect(suggestions[0].capability).toBe('testing');
+    expect(suggestions[0].matchingTaskCount).toBe(2);
     expect(suggestions.map((suggestion) => suggestion.capability)).toContain('typescript');
   });
 });

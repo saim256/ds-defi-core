@@ -21,7 +21,7 @@ export interface MatchTask {
   requiredCapabilities: string[];
   tags?: string[];
   podId?: string;
-  status: 'AVAILABLE' | 'CLAIMED' | 'SUBMITTED' | 'COMPLETED' | 'DISPUTED';
+  status: 'AVAILABLE' | 'CLAIMED' | 'IN_PROGRESS' | 'SUBMITTED' | 'UNDER_REVIEW' | 'COMPLETED' | 'DISPUTED';
 }
 
 export interface MatchDataSource {
@@ -62,21 +62,23 @@ const LEVEL_RANK: Record<AgentLevel, number> = {
 };
 
 export function findMatchingAgents(taskId: string, data: MatchDataSource): MatchResult[] {
-  const task = getTask(taskId, data);
+  const index = createMatchIndex(data);
+  const task = getTask(taskId, index);
   if (task.status !== 'AVAILABLE') return [];
 
   return data.agents
-    .map((agent) => calculateMatchScore(agent.id, task.id, data))
+    .map((agent) => calculateMatchScoreWithIndex(agent.id, task.id, index))
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score);
 }
 
 export function findMatchingTasks(agentId: string, data: MatchDataSource): MatchResult[] {
-  getAgent(agentId, data);
+  const index = createMatchIndex(data);
+  getAgent(agentId, index);
 
   return data.tasks
     .filter((task) => task.status === 'AVAILABLE')
-    .map((task) => calculateMatchScore(agentId, task.id, data))
+    .map((task) => calculateMatchScoreWithIndex(agentId, task.id, index))
     .filter((result) => result.score > 0)
     .sort((a, b) => b.score - a.score);
 }
@@ -86,8 +88,17 @@ export function calculateMatchScore(
   taskId: string,
   data: MatchDataSource
 ): MatchResult {
-  const agent = getAgent(agentId, data);
-  const task = getTask(taskId, data);
+  return calculateMatchScoreWithIndex(agentId, taskId, createMatchIndex(data));
+}
+
+interface MatchIndex {
+  agentsById: Map<string, MatchAgent>;
+  tasksById: Map<string, MatchTask>;
+}
+
+function calculateMatchScoreWithIndex(agentId: string, taskId: string, index: MatchIndex): MatchResult {
+  const agent = getAgent(agentId, index);
+  const task = getTask(taskId, index);
   const breakdown = buildBreakdown(agent, task);
   const baseScore =
     breakdown.levelMatch * 30 +
@@ -108,8 +119,9 @@ export function calculateMatchScore(
 }
 
 export function autoAssignTask(taskId: string, data: MatchDataSource): MatchResult | null {
+  const index = createMatchIndex(data);
   const eligible = findMatchingAgents(taskId, data).filter((result) => {
-    const agent = getAgent(result.agentId, data);
+    const agent = getAgent(result.agentId, index);
     return agent.optInAutoAssign === true && result.breakdown.availabilityScore > 0;
   });
 
@@ -123,21 +135,25 @@ export function suggestSkillDevelopment(
 ): SkillDevelopmentSuggestion[] {
   const agent = getAgent(agentId, data);
   const ownedCapabilities = new Set(agent.capabilities.map(normalize));
-  const counts = new Map<string, number>();
+  const counts = new Map<string, { capability: string; count: number }>();
 
   for (const task of data.tasks.filter((item) => item.status === 'AVAILABLE')) {
     for (const capability of task.requiredCapabilities) {
       const normalized = normalize(capability);
       if (!ownedCapabilities.has(normalized)) {
-        counts.set(capability, (counts.get(capability) ?? 0) + 1);
+        const current = counts.get(normalized);
+        counts.set(normalized, {
+          capability: current?.capability ?? normalized,
+          count: (current?.count ?? 0) + 1,
+        });
       }
     }
   }
 
-  return Array.from(counts.entries())
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  return Array.from(counts.values())
+    .sort((a, b) => b.count - a.count || a.capability.localeCompare(b.capability))
     .slice(0, limit)
-    .map(([capability, matchingTaskCount]) => ({
+    .map(({ capability, count: matchingTaskCount }) => ({
       capability,
       matchingTaskCount,
       reason: `${matchingTaskCount} available task(s) require ${capability}.`,
@@ -209,14 +225,21 @@ function buildReasons(
   return reasons;
 }
 
-function getAgent(agentId: string, data: MatchDataSource): MatchAgent {
-  const agent = data.agents.find((item) => item.id === agentId);
+function createMatchIndex(data: MatchDataSource): MatchIndex {
+  return {
+    agentsById: new Map(data.agents.map((agent) => [agent.id, agent])),
+    tasksById: new Map(data.tasks.map((task) => [task.id, task])),
+  };
+}
+
+function getAgent(agentId: string, source: MatchDataSource | MatchIndex): MatchAgent {
+  const agent = 'agentsById' in source ? source.agentsById.get(agentId) : source.agents.find((item) => item.id === agentId);
   if (!agent) throw new Error(`Agent not found: ${agentId}`);
   return agent;
 }
 
-function getTask(taskId: string, data: MatchDataSource): MatchTask {
-  const task = data.tasks.find((item) => item.id === taskId);
+function getTask(taskId: string, source: MatchDataSource | MatchIndex): MatchTask {
+  const task = 'tasksById' in source ? source.tasksById.get(taskId) : source.tasks.find((item) => item.id === taskId);
   if (!task) throw new Error(`Task not found: ${taskId}`);
   return task;
 }
