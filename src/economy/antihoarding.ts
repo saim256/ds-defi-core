@@ -173,7 +173,7 @@ export function checkContributionCap(
 export function executeRedistribution(
   amount: number,
   recipients: RedistributionRecipient[],
-  eventId = `redistribution-${Date.now()}`
+  eventId = `redistribution-${randomUUID()}`
 ): RedistributionEvent {
   if (amount <= 0) throw new Error('Redistribution amount must be positive.');
   if (recipients.length === 0) throw new Error('At least one recipient is required.');
@@ -211,28 +211,33 @@ export function getCirculationMetrics(
   config: EconomyConfig = DEFAULT_ECONOMY_CONFIG,
   now = new Date()
 ): CirculationMetrics {
-  const totalBalance = agents.reduce((sum, agent) => sum + agent.balance, 0);
-  const activeAgents = agents.filter(
-    (agent) => getDaysSinceLastActivity(agent, now) <= config.stagnationThresholdDays
-  );
-  const idleAgentCount = agents.length - activeAgents.length;
-  const velocityAverage =
-    agents.length === 0
-      ? 0
-      : agents.reduce(
-          (sum, agent) => sum + calculateVelocityBonus(agent, config, now).velocityScore,
-          0
-        ) / agents.length;
-  const balancesAboveSoftCap = agents.filter((agent) => agent.balance >= config.softCapAmount).length;
+  let totalBalance = 0;
+  let activeAgentCount = 0;
+  let velocityTotal = 0;
+  let balancesAboveSoftCap = 0;
+  let commonsPoolProjected = 0;
+
+  for (const agent of agents) {
+    totalBalance += agent.balance;
+    velocityTotal += calculateVelocityBonus(agent, config, now).velocityScore;
+    if (agent.balance >= config.softCapAmount) balancesAboveSoftCap += 1;
+
+    const daysSinceActivity = getDaysSinceLastActivity(agent, now);
+    if (daysSinceActivity <= config.stagnationThresholdDays) {
+      activeAgentCount += 1;
+    } else {
+      const idleDays = daysSinceActivity - config.stagnationThresholdDays;
+      commonsPoolProjected += roundSats(Math.min(agent.balance, agent.balance * config.decayRatePerDay * idleDays));
+    }
+  }
+
+  const idleAgentCount = agents.length - activeAgentCount;
+  const velocityAverage = agents.length === 0 ? 0 : velocityTotal / agents.length;
   const hoardingRisk = agents.length === 0 ? 0 : balancesAboveSoftCap / agents.length;
-  const commonsPoolProjected = applyStagnationDecay(agents, config, now).reduce(
-    (sum, result) => sum + result.commonsPoolAmount,
-    0
-  );
 
   return {
     totalBalance: roundSats(totalBalance),
-    activeAgentCount: activeAgents.length,
+    activeAgentCount,
     idleAgentCount,
     velocityAverage: Number(velocityAverage.toFixed(4)),
     hoardingRisk: Number(hoardingRisk.toFixed(4)),
@@ -242,9 +247,7 @@ export function getCirculationMetrics(
 
 function getDaysSinceLastActivity(agent: AgentEconomyState, now: Date): number {
   if (agent.transactionTimestamps.length === 0) return Number.POSITIVE_INFINITY;
-  const lastActivity = agent.transactionTimestamps.reduce((latest, timestamp) =>
-    timestamp > latest ? timestamp : latest
-  );
+  const lastActivity = new Date(Math.max(...agent.transactionTimestamps.map((timestamp) => timestamp.getTime())));
   return Math.floor((now.getTime() - lastActivity.getTime()) / 86_400_000);
 }
 
@@ -262,3 +265,4 @@ function roundSats(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round(value);
 }
+import { randomUUID } from 'node:crypto';
