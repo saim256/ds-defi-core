@@ -18,6 +18,7 @@ import type { SubCloser } from '../../src/wallet/nostr.js';
 class FakePublisher implements RelayPublisher {
   public published: Array<{ relays: string[]; event: Event }> = [];
   public subscriptions: Array<{ relays: string[]; filter: Filter }> = [];
+  public destroyCount = 0;
 
   publish(relays: string[], event: Event): Promise<string>[] {
     this.published.push({ relays, event });
@@ -29,6 +30,10 @@ class FakePublisher implements RelayPublisher {
     return {
       close: () => undefined,
     };
+  }
+
+  destroy(): void {
+    this.destroyCount += 1;
   }
 }
 
@@ -119,9 +124,34 @@ describe('nostr wallet integration', () => {
 
     expect(attestation.kind).toBe(30078);
     expect(attestation.tags.some((tag) => tag[0] === 'hash')).toBe(true);
+    expect(attestation.content).toBe('{"completed":true,"score":98}');
     expect(badge.kind).toBe(30009);
     expect(award.kind).toBe(8);
     expect(award.tags).toContainEqual(['p', recipient.publicKey]);
+  });
+
+  it('canonicalizes undefined attestation values without runtime errors', () => {
+    const issuer = generateKeypair();
+    const attestation = createAttestation(
+      { type: 'task-proof', subject: 'task-43', data: { completed: true, optional: undefined } },
+      { privateKey: issuer.privateKey }
+    );
+
+    expect(attestation.content).toBe('{"completed":true,"optional":null}');
+    expect(isSignedEvent(attestation)).toBe(true);
+  });
+
+  it('closes internally owned subscriptions without affecting injected publishers', () => {
+    const recipient = generateKeypair();
+    const publisher = new FakePublisher();
+    const sub = subscribeToZaps(recipient.publicKey, () => undefined, {
+      relays: ['wss://relay.example'],
+      publisher,
+    });
+
+    sub.close();
+
+    expect(publisher.destroyCount).toBe(0);
   });
 
   it('parses relay environment values defensively', () => {

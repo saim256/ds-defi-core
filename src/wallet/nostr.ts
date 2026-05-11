@@ -27,6 +27,7 @@ export interface SubCloser {
 export interface RelayPublisher {
   publish(relays: string[], event: Event): Promise<string>[];
   subscribe(relays: string[], filter: Filter, params: { onevent: (event: Event) => void }): SubCloser;
+  destroy?(): void;
 }
 
 export interface PublishResult {
@@ -83,10 +84,16 @@ export async function publishEvent(event: Event, options: NostrOptions = {}): Pr
   }
 
   const relays = resolveRelays(options.relays);
-  const publisher = options.publisher ?? new SimplePool();
-  const acknowledgements = await Promise.all(publisher.publish(relays, event));
+  const { publisher, ownsPublisher } = resolvePublisher(options.publisher);
 
-  return { event, relays, acknowledgements };
+  try {
+    const acknowledgements = await Promise.all(publisher.publish(relays, event));
+    return { event, relays, acknowledgements };
+  } finally {
+    if (ownsPublisher) {
+      publisher.destroy?.();
+    }
+  }
 }
 
 export async function sendZap(
@@ -124,9 +131,9 @@ export function subscribeToZaps(
 ): SubCloser {
   assertHexPubkey(pubkey);
   const relays = resolveRelays(options.relays);
-  const publisher = options.publisher ?? new SimplePool();
+  const { publisher, ownsPublisher } = resolvePublisher(options.publisher);
 
-  return publisher.subscribe(
+  const subscription = publisher.subscribe(
     relays,
     {
       kinds: [KIND_ZAP_RECEIPT],
@@ -134,6 +141,15 @@ export function subscribeToZaps(
     },
     { onevent: onZap }
   );
+
+  return {
+    close(reason?: string): void {
+      subscription.close(reason);
+      if (ownsPublisher) {
+        publisher.destroy?.();
+      }
+    },
+  };
 }
 
 export function createAttestation(data: object, options: NostrOptions = {}): VerifiedEvent {
@@ -141,12 +157,13 @@ export function createAttestation(data: object, options: NostrOptions = {}): Ver
   const privateKey = options.privateKey ?? loadPrivateKey();
   const publicKey = getPublicKey(normalizePrivateKey(privateKey));
   const digest = stableHash(attestation.data);
+  const content = canonicalize(attestation.data);
 
   return signEvent(
     {
       kind: KIND_APP_DATA,
       created_at: now(),
-      content: JSON.stringify(attestation.data),
+      content,
       tags: [
         ['d', `ds-attestation:${digest}`],
         ['t', 'attestation'],
@@ -255,6 +272,14 @@ function resolveRelays(relays?: string[]): string[] {
   return relays?.length ? parseRelayList(relays.join(',')) : parseRelayList();
 }
 
+function resolvePublisher(publisher?: RelayPublisher): { publisher: RelayPublisher; ownsPublisher: boolean } {
+  if (publisher) {
+    return { publisher, ownsPublisher: false };
+  }
+
+  return { publisher: new SimplePool(), ownsPublisher: true };
+}
+
 function loadPrivateKey(): Uint8Array {
   const value = process.env.NOSTR_PRIVATE_KEY;
   if (!value) {
@@ -308,6 +333,9 @@ function stableHash(value: object): string {
 }
 
 function canonicalize(value: unknown): string {
+  if (value === undefined) {
+    return 'null';
+  }
   if (Array.isArray(value)) {
     return `[${value.map(canonicalize).join(',')}]`;
   }
