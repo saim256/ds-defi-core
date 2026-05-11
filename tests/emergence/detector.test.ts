@@ -33,6 +33,7 @@ describe('emergence detector', () => {
     expect(analysis.events.map((event) => event.type)).toEqual(
       expect.arrayContaining(['SELF_CORRECTION', 'PREFERENCE_EXPRESSION', 'CREATIVE_SYNTHESIS', 'META_AWARENESS'])
     );
+    expect(new Set(analysis.events.map((event) => event.id)).size).toBe(analysis.events.length);
   });
 
   it('avoids false positives on basic operational output', () => {
@@ -54,6 +55,11 @@ describe('emergence detector', () => {
   });
 
   it('checks graduation eligibility by level and extra criteria', () => {
+    const candidate = checkGraduationEligibility({
+      agentId: 'agent-0',
+      level: 'L0_CANDIDATE',
+      events: [verifiedEvent('agent-0', 50)],
+    });
     const eligible = checkGraduationEligibility({
       agentId: 'agent-1',
       level: 'L1_WORKER',
@@ -66,6 +72,8 @@ describe('emergence detector', () => {
       managerEndorsed: false,
     });
 
+    expect(candidate.eligible).toBe(true);
+    expect(candidate.nextLevel).toBe('L1_WORKER');
     expect(eligible.eligible).toBe(true);
     expect(eligible.nextLevel).toBe('L2_EMERGENT');
     expect(blocked.eligible).toBe(false);

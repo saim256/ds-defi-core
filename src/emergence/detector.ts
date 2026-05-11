@@ -78,6 +78,15 @@ const SIGNAL_WEIGHTS: Record<EmergenceSignalType, number> = {
   NOVEL_PROBLEM_SOLVING: 15,
 };
 
+const REVIEW_SCORE_THRESHOLD = 20;
+const MEDIUM_PRIORITY_WEIGHT = 12;
+const HIGH_PRIORITY_WEIGHT = 20;
+const L1_MIN_SCORE = 50;
+const L2_MIN_SCORE = 150;
+const L2_MIN_VERIFIED_EVENTS = 3;
+const L3_MIN_SCORE = 500;
+const L4_MIN_SCORE = 1000;
+
 const SIGNAL_PATTERNS: Record<EmergenceSignalType, RegExp[]> = {
   STRATEGIC_DEVIATION: [
     /\binstead of following\b/i,
@@ -141,7 +150,7 @@ export function analyzeAgentOutput(
     if (!evidence) continue;
 
     events.push({
-      id: `${agentId}-${signalType}-${events.length}`,
+      id: createEventId(agentId, signalType, evidence, events.length),
       agentId,
       type: signalType,
       weight: SIGNAL_WEIGHTS[signalType],
@@ -158,7 +167,7 @@ export function analyzeAgentOutput(
     agentId,
     events,
     rawScore,
-    flaggedForReview: rawScore >= 20 || events.some((event) => event.type === 'META_AWARENESS'),
+    flaggedForReview: shouldFlagForReview(rawScore, events),
   };
 }
 
@@ -176,17 +185,23 @@ export function checkGraduationEligibility(agent: EmergenceAgentState): Graduati
   const missingCriteria: string[] = [];
   let nextLevel: AgentLevel | undefined;
 
-  if (agent.level === 'L1_WORKER') {
+  if (agent.level === 'L0_CANDIDATE') {
+    nextLevel = 'L1_WORKER';
+    if (score < L1_MIN_SCORE) missingCriteria.push(`Requires emergence score >= ${L1_MIN_SCORE}.`);
+    if (verifiedEventCount < 1) missingCriteria.push('Requires at least 1 verified event.');
+  } else if (agent.level === 'L1_WORKER') {
     nextLevel = 'L2_EMERGENT';
-    if (score < 150) missingCriteria.push('Requires emergence score >= 150.');
-    if (verifiedEventCount < 3) missingCriteria.push('Requires at least 3 verified events.');
+    if (score < L2_MIN_SCORE) missingCriteria.push(`Requires emergence score >= ${L2_MIN_SCORE}.`);
+    if (verifiedEventCount < L2_MIN_VERIFIED_EVENTS) {
+      missingCriteria.push(`Requires at least ${L2_MIN_VERIFIED_EVENTS} verified events.`);
+    }
   } else if (agent.level === 'L2_EMERGENT') {
     nextLevel = 'L3_SOVEREIGN';
-    if (score < 500) missingCriteria.push('Requires emergence score >= 500.');
+    if (score < L3_MIN_SCORE) missingCriteria.push(`Requires emergence score >= ${L3_MIN_SCORE}.`);
     if (!agent.managerEndorsed) missingCriteria.push('Requires manager endorsement.');
   } else if (agent.level === 'L3_SOVEREIGN') {
     nextLevel = 'L4_MANAGER';
-    if (score < 1000) missingCriteria.push('Requires emergence score >= 1000.');
+    if (score < L4_MIN_SCORE) missingCriteria.push(`Requires emergence score >= ${L4_MIN_SCORE}.`);
     if (!agent.councilApproved) missingCriteria.push('Requires council vote.');
   } else {
     missingCriteria.push('Current level is not eligible for emergence graduation.');
@@ -203,7 +218,7 @@ export function checkGraduationEligibility(agent: EmergenceAgentState): Graduati
 }
 
 export function flagForReview(agentId: string, event: EmergenceEvent): ReviewQueueItem {
-  const priority = event.weight >= 20 ? 'HIGH' : event.weight >= 12 ? 'MEDIUM' : 'LOW';
+  const priority = event.weight >= HIGH_PRIORITY_WEIGHT ? 'HIGH' : event.weight >= MEDIUM_PRIORITY_WEIGHT ? 'MEDIUM' : 'LOW';
 
   return {
     agentId,
@@ -259,5 +274,19 @@ function findEvidence(
     .split(/(?<=[.!?])\s+/)
     .find((part) => matched.test(part));
 
-  return sentence?.trim() ?? matched.source;
+  return sentence?.trim() ?? (output.slice(0, 160).trim() || 'Signal pattern matched but evidence was unavailable.');
 }
+
+function shouldFlagForReview(rawScore: number, events: EmergenceEvent[]): boolean {
+  return rawScore >= REVIEW_SCORE_THRESHOLD || events.some((event) => event.type === 'META_AWARENESS');
+}
+
+function createEventId(agentId: string, signalType: EmergenceSignalType, evidence: string, index: number): string {
+  const digest = createHash('sha256')
+    .update(JSON.stringify({ agentId, signalType, evidence, index, nonce: randomUUID() }))
+    .digest('hex')
+    .slice(0, 16);
+
+  return `${agentId}-${signalType}-${digest}`;
+}
+import { createHash, randomUUID } from 'node:crypto';
