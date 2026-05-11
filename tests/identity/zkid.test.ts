@@ -68,6 +68,37 @@ describe('zk identity system', () => {
     expect(verifyProof(tamperedCommitment)).toBe(false);
   });
 
+  it('does not accept proofs recreated from public fields only', () => {
+    const identity = generateZkId('agent-public-forgery', {
+      level: 'L3_SOVEREIGN',
+      capabilities: ['reviews'],
+      reputationScore: 500,
+    });
+    const validProof = proveLevel(identity.zkId, 'L1_WORKER');
+    const forgedProof: ZkProof = {
+      ...validProof,
+      proof: '0'.repeat(64),
+    };
+
+    expect(validProof).not.toHaveProperty('proofSecret');
+    expect(verifyProof(validProof)).toBe(true);
+    expect(verifyProof(forgedProof)).toBe(false);
+  });
+
+  it('canonicalizes undefined proof inputs without runtime errors', () => {
+    const malformedProof: ZkProof = {
+      type: 'level',
+      zkId: 'zk_unknown',
+      commitment: '0'.repeat(64),
+      publicInputs: { minLevel: undefined as unknown as string },
+      proof: '0'.repeat(64),
+      timestamp: new Date(),
+    };
+
+    expect(() => verifyProof(malformedProof)).not.toThrow();
+    expect(verifyProof(malformedProof)).toBe(false);
+  });
+
   it('reveals identity only with a valid reveal signature', () => {
     const identity = generateZkId('agent-epsilon', {
       level: 'L2_EMERGENT',

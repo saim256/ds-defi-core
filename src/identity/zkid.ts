@@ -38,6 +38,7 @@ interface ZkIdentityRecord extends ZkIdentityClaims {
   zkId: string;
   agentId: string;
   salt: string;
+  proofSecret: string;
   commitment: string;
   createdAt: string;
   level: AgentLevel;
@@ -65,6 +66,7 @@ export function generateZkId(agentId: string, claims: ZkIdentityClaims = {}): Zk
   }
 
   const salt = randomBytes(16).toString('hex');
+  const proofSecret = randomBytes(32).toString('hex');
   const normalizedClaims = normalizeClaims(claims);
   const commitment = hashCanonical({
     version: PROOF_VERSION,
@@ -79,6 +81,7 @@ export function generateZkId(agentId: string, claims: ZkIdentityClaims = {}): Zk
     zkId,
     agentId,
     salt,
+    proofSecret,
     commitment,
     createdAt: new Date().toISOString(),
     ...normalizedClaims,
@@ -151,7 +154,7 @@ export function verifyProof(proof: ZkProof): boolean {
     return false;
   }
 
-  return safeEqual(proof.proof, proofDigest(proof.type, proof.commitment, proof.publicInputs));
+  return safeEqual(proof.proof, proofDigest(proof.type, proof.commitment, proof.publicInputs, record.proofSecret));
 }
 
 export function createRevealSignature(zkId: string): string {
@@ -218,7 +221,7 @@ function createProof(
     zkId: record.zkId,
     commitment: record.commitment,
     publicInputs,
-    proof: proofDigest(type, record.commitment, publicInputs),
+    proof: proofDigest(type, record.commitment, publicInputs, record.proofSecret),
     timestamp: new Date(),
   };
 }
@@ -226,13 +229,15 @@ function createProof(
 function proofDigest(
   type: ZkProofType,
   commitment: string,
-  publicInputs: ZkProof['publicInputs']
+  publicInputs: ZkProof['publicInputs'],
+  proofSecret: string
 ): string {
   return hashCanonical({
     version: PROOF_VERSION,
     type,
     commitment,
     publicInputs,
+    proofSecret,
   });
 }
 
@@ -264,6 +269,9 @@ function hashCanonical(value: unknown): string {
 }
 
 function canonicalize(value: unknown): string {
+  if (value === undefined) {
+    return 'null';
+  }
   if (Array.isArray(value)) {
     return `[${value.map(canonicalize).join(',')}]`;
   }
